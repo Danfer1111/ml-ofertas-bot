@@ -1,19 +1,23 @@
 import os
 
-# === CREDENCIALES ===
+# === CREDENCIALES TELEGRAM ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8759115195:AAEUEQ-a2kvjwv6SL70RR7XFceNYmw1TzzE")
 CHAT_ID = os.getenv("CHAT_ID", "1803571733")
 AFFILIATE_LINK = os.getenv("AFFILIATE_LINK", "https://meli.la/1Y2v7jp")
 
-# === CONFIGURACIÓN DE BÚSQUEDA ===
-MIN_DISCOUNT_PERCENT = 40       # Descuento mínimo para publicar
-MAX_PRODUCTS_PER_RUN = 10       # Máx. productos por ciclo
-SEEN_IDS_LIMIT = 100            # Cuántos IDs recordar para no duplicar
-SEARCH_INTERVAL_HOURS = 1       # Frecuencia de búsqueda
+# === CREDENCIALES MERCADO LIBRE (OAuth — requerido en datacenter) ===
+# Regístrate gratis en https://developers.mercadolibre.com.mx/
+# Crea una app y copia el Client ID y Secret
+ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "")        # ej: "1234567890123456"
+ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "") # ej: "AbCdEf1234567890AbCdEf"
+ML_ACCESS_TOKEN = os.getenv("ML_ACCESS_TOKEN", "")   # alternativa: token estático
 
-# === CATEGORÍAS A BUSCAR ===
-# IDs de categorías de Mercado Libre México
-# Ref: https://api.mercadolibre.com/sites/MLM/categories
+# === CONFIGURACIÓN DE BÚSQUEDA ===
+MIN_DISCOUNT_PERCENT = 40
+MAX_PRODUCTS_PER_RUN = 10
+SEEN_IDS_LIMIT = 100
+SEARCH_INTERVAL_HOURS = 6
+
 SEARCH_QUERIES = [
     "electronica",
     "celulares",
@@ -26,6 +30,6 @@ SEARCH_QUERIES = [
 ]
 
 # === MERCADO LIBRE API ===
-ML_SITE = "MLM"   # México
+ML_SITE = "MLM"
 ML_API_BASE = "https://api.mercadolibre.com"
-ML_SEARCH_LIMIT = 50   # items por búsqueda (máx 50 en API pública)
+ML_SEARCH_LIMIT = 50

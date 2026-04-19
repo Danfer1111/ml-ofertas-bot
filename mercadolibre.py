@@ -2,88 +2,122 @@ import requests
 import logging
 import time
 from typing import Optional
-from config import ML_SITE, ML_API_BASE, ML_SEARCH_LIMIT, MIN_DISCOUNT_PERCENT, AFFILIATE_LINK
+from config import (
+    ML_SITE, ML_API_BASE, ML_SEARCH_LIMIT,
+    MIN_DISCOUNT_PERCENT, AFFILIATE_LINK,
+    ML_CLIENT_ID, ML_CLIENT_SECRET, ML_ACCESS_TOKEN,
+)
 
 logger = logging.getLogger(__name__)
 
-# Headers que simulan un navegador real para evitar 403 de ML
-HEADERS = {
+SESSION = requests.Session()
+SESSION.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.mercadolibre.com.mx/",
-    "Origin": "https://www.mercadolibre.com.mx",
-    "Connection": "keep-alive",
-}
+    "Accept": "application/json",
+    "Accept-Language": "es-MX,es;q=0.9",
+})
 
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
+_token_cache: dict = {"token": None, "expires_at": 0}
 
-def build_affiliate_url(product_url: str) -> str:
-    """
-    Genera el link de afiliado para un producto.
-    El link base de afiliado ya redirige al marketplace;
-    para tracking por producto se añade el permalink como parámetro.
-    """
-    # El link corto del programa de afiliados de ML redirige a la home.
-    # Para vincular un producto específico, incluimos el URL del producto
-    # como referencia en el mensaje (el usuario llega al producto desde el link afiliado).
-    # ML no expone la API de afiliados públicamente, así que usamos el link base
-    # + el permalink directo como referencia informativa.
-    return f"{AFFILIATE_LINK}"
 
-def get_item_details(item_id: str) -> Optional[dict]:
-    """Obtiene detalles completos de un producto por su ID."""
-    try:
-        url = f"{ML_API_BASE}/items/{item_id}"
-        resp = SESSION.get(url, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.warning(f"Error obteniendo detalles de {item_id}: {e}")
+def get_access_token() -> Optional[str]:
+    if ML_ACCESS_TOKEN:
+        return ML_ACCESS_TOKEN
+
+    if not ML_CLIENT_ID or not ML_CLIENT_SECRET:
+        logger.warning("Sin credenciales ML OAuth — las requests pueden fallar con 403.")
         return None
 
-def search_deals(query: str) -> list[dict]:
-    """
-    Busca productos con descuento en ML API pública.
-    Filtra por descuento mínimo configurado.
-    """
-    deals = []
-    url = f"{ML_API_BASE}/sites/{ML_SITE}/search"
-    params = {
-        "q": query,
-        "limit": ML_SEARCH_LIMIT,
-        "sort": "relevance",
-    }
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires_at"]:
+        return _token_cache["token"]
 
-    # Retry con backoff ante errores temporales (429, 503, 403)
+    try:
+        resp = requests.post(
+            "https://api.mercadolibre.com/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": ML_CLIENT_ID,
+                "client_secret": ML_CLIENT_SECRET,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        token = data["access_token"]
+        expires_in = data.get("expires_in", 21600)
+        _token_cache["token"] = token
+        _token_cache["expires_at"] = now + expires_in - 300
+        logger.info("Token OAuth obtenido correctamente.")
+        return token
+    except Exception as e:
+        logger.error(f"Error obteniendo token OAuth: {e}")
+        return None
+
+
+def ml_get(url: str, params: dict = None) -> Optional[requests.Response]:
+    token = get_access_token()
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     for attempt in range(3):
         try:
-            resp = SESSION.get(url, params=params, timeout=15)
+            resp = SESSION.get(url, params=params, headers=headers, timeout=15)
+
+            if resp.status_code == 401 and ML_CLIENT_ID:
+                _token_cache["expires_at"] = 0
+                token = get_access_token()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                continue
+
             if resp.status_code in (429, 503):
                 wait = 2 ** attempt * 5
-                logger.warning(f"[{query}] Rate limit ({resp.status_code}), esperando {wait}s...")
+                logger.warning(f"Rate limit {resp.status_code}, esperando {wait}s...")
                 time.sleep(wait)
                 continue
+
+            if resp.status_code == 403:
+                logger.error(
+                    "403 Forbidden: ML bloquea IPs de datacenter sin OAuth. "
+                    "Configura ML_CLIENT_ID + ML_CLIENT_SECRET. "
+                    "Regístrate gratis en https://developers.mercadolibre.com.mx/"
+                )
+                return None
+
             resp.raise_for_status()
-            break
+            return resp
+
         except requests.exceptions.RequestException as e:
             if attempt == 2:
-                logger.error(f"Error de red buscando '{query}' tras 3 intentos: {e}")
-                return deals
+                logger.error(f"Error de red tras 3 intentos: {e}")
+                return None
             time.sleep(3)
-    else:
+
+    return None
+
+
+def build_affiliate_url(product_url: str) -> str:
+    return AFFILIATE_LINK
+
+
+def search_deals(query: str) -> list[dict]:
+    deals = []
+    resp = ml_get(
+        f"{ML_API_BASE}/sites/{ML_SITE}/search",
+        params={"q": query, "limit": ML_SEARCH_LIMIT, "sort": "relevance"},
+    )
+    if not resp:
         return deals
 
     try:
-        data = resp.json()
-        results = data.get("results", [])
-        logger.info(f"[{query}] → {len(results)} resultados obtenidos de ML")
+        results = resp.json().get("results", [])
+        logger.info(f"[{query}] -> {len(results)} resultados")
 
         for item in results:
             original_price = item.get("original_price")
@@ -103,10 +137,9 @@ def search_deals(query: str) -> list[dict]:
                 thumbnail = thumbnail.replace("-I.jpg", "-O.jpg")
 
             permalink = item.get("permalink", "")
-
             deals.append({
                 "id": item.get("id"),
-                "title": item.get("title", "Sin título"),
+                "title": item.get("title", "Sin titulo"),
                 "original_price": original_price,
                 "current_price": current_price,
                 "discount": discount,
@@ -117,35 +150,33 @@ def search_deals(query: str) -> list[dict]:
                 "sold_quantity": item.get("sold_quantity", 0),
             })
 
-        logger.info(f"[{query}] → {len(deals)} ofertas con ≥{MIN_DISCOUNT_PERCENT}% descuento")
+        logger.info(f"[{query}] -> {len(deals)} ofertas con >={MIN_DISCOUNT_PERCENT}% descuento")
     except Exception as e:
         logger.error(f"Error procesando respuesta de '{query}': {e}")
 
     return deals
 
+
 def format_price(amount: float) -> str:
-    """Formatea precio con separador de miles."""
     return f"${amount:,.0f}"
 
+
 def format_message(deal: dict) -> str:
-    """Construye el mensaje de Telegram para una oferta."""
     condition_map = {"new": "Nuevo", "used": "Usado", "refurbished": "Reacondicionado"}
     condition = condition_map.get(deal["condition"], deal["condition"])
 
     msg = (
-        f"🔥 *{deal['title']}*\n\n"
-        f"💸 ~~{format_price(deal['original_price'])}~~ → "
-        f"*{format_price(deal['current_price'])}*\n"
-        f"📉 Descuento: *{deal['discount']}%*\n"
-        f"📦 Estado: {condition}\n"
+        f"Oferta: *{deal['title']}*\n\n"
+        f"Precio original: {format_price(deal['original_price'])}\n"
+        f"Precio oferta: *{format_price(deal['current_price'])}*\n"
+        f"Descuento: *{deal['discount']}%*\n"
+        f"Estado: {condition}\n"
     )
-
     if deal["sold_quantity"] > 0:
-        msg += f"✅ Vendidos: {deal['sold_quantity']:,}\n"
+        msg += f"Vendidos: {deal['sold_quantity']:,}\n"
 
     msg += (
-        f"\n🛒 [Ver oferta en Mercado Libre]({deal['permalink']})\n"
-        f"🤝 [Link de afiliado]({deal['affiliate_url']})"
+        f"\n[Ver en Mercado Libre]({deal['permalink']})\n"
+        f"[Link de afiliado]({deal['affiliate_url']})"
     )
-
     return msg
