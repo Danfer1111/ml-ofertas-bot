@@ -1,8 +1,10 @@
 import logging
 import asyncio
 import random
+import threading
 from collections import deque
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -25,6 +27,25 @@ logger = logging.getLogger("main")
 
 # ── Estado global ─────────────────────────────────────────────────────────────
 seen_ids: deque = deque(maxlen=SEEN_IDS_LIMIT)
+
+
+# ── Health-check server (requerido por Render Web Service) ───────────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass  # silenciar logs del servidor HTTP
+
+
+def start_health_server():
+    port = int(__import__("os").environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"Health server corriendo en puerto {port}")
 
 
 async def send_deal(bot: Bot, deal: dict) -> bool:
@@ -117,6 +138,9 @@ async def startup_message(bot: Bot) -> None:
 
 
 async def main() -> None:
+    # Levantar servidor HTTP antes que todo (Render lo necesita para no matar el proceso)
+    start_health_server()
+
     bot = Bot(token=BOT_TOKEN)
 
     # Verificar credenciales
@@ -126,6 +150,10 @@ async def main() -> None:
     except TelegramError as e:
         logger.critical(f"Error autenticando bot: {e}")
         return
+
+    # Diagnóstico: mostrar CHAT_ID configurado
+    logger.info(f"CHAT_ID configurado: {CHAT_ID}")
+    logger.info("Si ves 'Chat not found', abre Telegram, busca tu bot y envíale /start primero.")
 
     await startup_message(bot)
 

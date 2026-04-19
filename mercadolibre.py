@@ -1,9 +1,28 @@
 import requests
 import logging
+import time
 from typing import Optional
 from config import ML_SITE, ML_API_BASE, ML_SEARCH_LIMIT, MIN_DISCOUNT_PERCENT, AFFILIATE_LINK
 
 logger = logging.getLogger(__name__)
+
+# Headers que simulan un navegador real para evitar 403 de ML
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.mercadolibre.com.mx/",
+    "Origin": "https://www.mercadolibre.com.mx",
+    "Connection": "keep-alive",
+}
+
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
 def build_affiliate_url(product_url: str) -> str:
     """
@@ -22,7 +41,7 @@ def get_item_details(item_id: str) -> Optional[dict]:
     """Obtiene detalles completos de un producto por su ID."""
     try:
         url = f"{ML_API_BASE}/items/{item_id}"
-        resp = requests.get(url, timeout=10)
+        resp = SESSION.get(url, timeout=10)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -42,9 +61,26 @@ def search_deals(query: str) -> list[dict]:
         "sort": "relevance",
     }
 
+    # Retry con backoff ante errores temporales (429, 503, 403)
+    for attempt in range(3):
+        try:
+            resp = SESSION.get(url, params=params, timeout=15)
+            if resp.status_code in (429, 503):
+                wait = 2 ** attempt * 5
+                logger.warning(f"[{query}] Rate limit ({resp.status_code}), esperando {wait}s...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.exceptions.RequestException as e:
+            if attempt == 2:
+                logger.error(f"Error de red buscando '{query}' tras 3 intentos: {e}")
+                return deals
+            time.sleep(3)
+    else:
+        return deals
+
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
         logger.info(f"[{query}] → {len(results)} resultados obtenidos de ML")
@@ -53,7 +89,6 @@ def search_deals(query: str) -> list[dict]:
             original_price = item.get("original_price")
             current_price = item.get("price")
 
-            # Filtrar: necesitamos ambos precios para calcular descuento
             if not original_price or not current_price:
                 continue
             if original_price <= current_price:
@@ -63,10 +98,8 @@ def search_deals(query: str) -> list[dict]:
             if discount < MIN_DISCOUNT_PERCENT:
                 continue
 
-            # Imagen
             thumbnail = item.get("thumbnail", "")
             if thumbnail:
-                # ML devuelve thumbnails pequeños; pedimos imagen mediana
                 thumbnail = thumbnail.replace("-I.jpg", "-O.jpg")
 
             permalink = item.get("permalink", "")
@@ -85,10 +118,8 @@ def search_deals(query: str) -> list[dict]:
             })
 
         logger.info(f"[{query}] → {len(deals)} ofertas con ≥{MIN_DISCOUNT_PERCENT}% descuento")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error de red buscando '{query}': {e}")
     except Exception as e:
-        logger.error(f"Error inesperado buscando '{query}': {e}")
+        logger.error(f"Error procesando respuesta de '{query}': {e}")
 
     return deals
 
