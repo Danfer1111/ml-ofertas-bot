@@ -1,0 +1,33 @@
+name: Bot Ofertas ML
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # cada 6 horas: 00:00, 06:00, 12:00, 18:00 UTC
+  workflow_dispatch:          # permite ejecutar manualmente desde GitHub
+
+jobs:
+  buscar-ofertas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          AFFILIATE_LINK: ${{ secrets.AFFILIATE_LINK }}
+          ML_CLIENT_ID: ${{ secrets.ML_CLIENT_ID }}
+          ML_CLIENT_SECRET: ${{ secrets.ML_CLIENT_SECRET }}
+        run: python bot_simple.py
