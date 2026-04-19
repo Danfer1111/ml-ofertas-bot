@@ -9,7 +9,7 @@ AFFILIATE_LINK = os.getenv("AFFILIATE_LINK", "https://meli.la/1Y2v7jp")
 MIN_DISCOUNT_PERCENT = 40       # Descuento mínimo para publicar
 MAX_PRODUCTS_PER_RUN = 10       # Máx. productos por ciclo
 SEEN_IDS_LIMIT = 100            # Cuántos IDs recordar para no duplicar
-SEARCH_INTERVAL_HOURS = 6       # Frecuencia de búsqueda
+SEARCH_INTERVAL_HOURS = 1       # Frecuencia de búsqueda
 
 # === CATEGORÍAS A BUSCAR ===
 # IDs de categorías de Mercado Libre México
